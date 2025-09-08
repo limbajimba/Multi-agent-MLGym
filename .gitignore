@@ -178,3 +178,29 @@ trajectories/*
 trajectories/**/*.log
 trajectories/**/*.pdf
 trajectories/**/args.yaml
+
+# Personal experiment data
+*_experiments_data.csv
+*_individual_agents.csv
+final_experiments_*.csv
+final_experiments_*.xlsx
+supervisor_*.csv
+supervisor_*.png
+cost_performance.png
+superbisor_vs_sequential_gain.png
+supervisor_vs_sequential_costs.png
+
+# Generated analysis files
+thesis_analysis_comprehensive.ipynb
+supervisor_vs_sequential_analysis.ipynb
+create_realistic_thesis_data.py
+
+# Personal results and figures
+figures/
+tables/
+results/academic_experiment/
+results/tables/
+
+# Temporary files
+*.tmp
+*.temp

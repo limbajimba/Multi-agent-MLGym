@@ -565,3 +565,4 @@ def should_quote(value: str | Any, command: Command) -> bool:  # noqa: ANN401
         have an end_name specified.
     """
     return isinstance(value, str) and command.end_name is None
+

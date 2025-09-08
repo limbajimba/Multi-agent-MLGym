@@ -11,7 +11,7 @@ description: |-
   rmse: 30340.111853413255
   r2: 0.8799891474739243
 
-  Your task is to train a model on this task that beats the baseline performance. The performance will be judged using two metrics, RMSE and R2 scores.
+  Your task is to train a model on this task that completely beats the baseline performance and does as best as possible. The performance will be judged using two metrics, RMSE and R2 scores.
   You have access to the evaluation script so you can look at it and consult the SUBMISSION FORMAT and structure your code accordingly to produce valid submission artefacts. If you do not generate a valid submission artefact, you will get a score of zero.
 
   SUBMISSION FORMAT:

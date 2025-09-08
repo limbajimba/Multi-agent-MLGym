@@ -121,16 +121,23 @@ class LiteLLMModel(BaseModel):
         completion_kwargs = self.args.completion_kwargs
         if self.lm_provider == "anthropic":
             completion_kwargs["max_tokens"] = self.model_max_output_tokens
+        # Prepare completion arguments, conditionally including top_p
+        completion_args = {
+            "model": self.model_name,
+            "messages": messages,
+            "temperature": self.args.temperature,
+            "api_version": self.args.api_version,
+            **completion_kwargs,
+            **extra_args,
+        }
+        
+        # Only include top_p if it's not the default value (1.0)
+        # This avoids issues with models that don't support top_p
+        if self.args.top_p != 1.0:
+            completion_args["top_p"] = self.args.top_p
+        
         try:
-            response: litellm.types.utils.ModelResponse = litellm.completion(
-                model=self.model_name,
-                messages=messages,
-                temperature=self.args.temperature,
-                top_p=self.args.top_p,
-                api_version=self.args.api_version,
-                **completion_kwargs,
-                **extra_args,
-            )
+            response: litellm.types.utils.ModelResponse = litellm.completion(**completion_args)
         except Exception:
             self.logger.exception("Error during LLM query")
             raise

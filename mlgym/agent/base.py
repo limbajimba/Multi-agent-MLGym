@@ -346,6 +346,20 @@ class BaseAgent:
         results = {}
         if self._info.get("score", None) is not None:
             results["agent"] = self._info["score"]
+        
+        # Include cost information from model stats
+        if self._info.get("model_stats", None) is not None:
+            results["cost"] = self._info["model_stats"]
+            # Debug logging
+            import logging
+            logger = logging.getLogger(self.name)
+            logger.info(f"Agent {self.name} saving cost info: {self._info['model_stats']}")
+        else:
+            # Debug logging for missing model stats
+            import logging
+            logger = logging.getLogger(self.name)
+            logger.warning(f"Agent {self.name} has no model_stats in info: {list(self._info.keys())}")
+        
         assert self._env is not None
         assert self._env.task is not None
         if self._env.task.args.baseline_scores:
@@ -410,11 +424,14 @@ class BaseAgent:
         except json.JSONDecodeError as e:
             msg = f"State {state!r} is not valid json. This is an internal error, please report it."
             raise ValueError(msg) from e
-        # add step information to state_vars
-        # FIXME: Environment dependency
-        assert self._env is not None
-        state_vars["current_step"] = self._env.current_step
-        state_vars["remaining_steps"] = self._env.max_steps - self._env.current_step
+        # add step information to state_vars only if not already present
+        # This preserves agent-specific step information from supervisor
+        if "current_step" not in state_vars:
+            assert self._env is not None
+            state_vars["current_step"] = self._env.current_step
+        if "remaining_steps" not in state_vars:
+            assert self._env is not None
+            state_vars["remaining_steps"] = self._env.max_steps - self._env.current_step
 
         templates: list[str] = []
 

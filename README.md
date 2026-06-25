@@ -1,139 +1,315 @@
-<p align="center">
-    <img src="./assets/logos/mlgym_logo.png" height="300" width="600" alt="MLGym Logo">
-</p>
+# Multi-agent MLGym
 
-<p align="center">
-  <a href="https://creativecommons.org/licenses/by-nc/4.0/"><img src="https://img.shields.io/badge/License-CC_BY--NC_4.0-lightgrey.svg" /></a>
-  <!-- Someone else has pypi package with the same name -->
-  <!-- <a href="https://pepy.tech/project/mlgym"><img src="https://static.pepy.tech/personalized-badge/minihack?period=total&units=international_system&left_color=black&right_color=red&left_text=Downloads" /></a> -->
-  <!-- <a href="https://github.com/facebookresearch/minihack/actions/workflows/test_and_deploy.yml"><img src="https://github.com/facebookresearch/minihack/actions/workflows/test_and_deploy.yml/badge.svg?branch=main" /></a> -->
-  <a href="https://arxiv.org/abs/2502.14499"><img src="https://img.shields.io/badge/arXiv-2502.14499-b31b1b.svg"/></a>
-  <a href="https://discord.gg/Zep3cyHhjJ"><img src="https://img.shields.io/badge/Discord-Join-5865F2?logo=discord&logoColor=white" /></a>
-  <a href="https://sites.google.com/view/mlgym"><img src="https://img.shields.io/badge/Website-MLGym-blue" /></a>
- </p>
+A hierarchical multi-agent layer built on top of Meta's MLGym. A supervisor agent plans a research workflow, creates specialised worker agents, runs them in a shared container, and aggregates their results. The repository keeps the full MLGym single-agent framework intact and adds the supervisor, the worker roles, a human-in-the-loop path, and the run scripts that drive them.
 
-## Table of contents
+## Contents
 
-* [Introduction](#introduction)
-* [Installation](#installation)
-* [Quick Start](#quick-start)
-* [Trajectory Visualizer](#trajectory-visualizer)
-* [Contributions and Maintenance](#contributions-and-maintenance)
+* [What this is](#what-this-is)
+* [Relationship to upstream MLGym](#relationship-to-upstream-mlgym)
+* [The multi-agent architecture](#the-multi-agent-architecture)
+* [How orchestration works](#how-orchestration-works)
+* [Self-correction and critique](#self-correction-and-critique)
+* [Worker roles and the orchestration pipeline](#worker-roles-and-the-orchestration-pipeline)
+* [Tasks and benchmark](#tasks-and-benchmark)
+* [Results](#results)
+* [Repository structure](#repository-structure)
+* [Getting started](#getting-started)
+* [Running the multi-agent workflows](#running-the-multi-agent-workflows)
+* [Single-agent MLGym (upstream)](#single-agent-mlgym-upstream)
+* [Trajectory visualizer](#trajectory-visualizer)
+* [Status and caveats](#status-and-caveats)
+* [Credit and citation](#credit-and-citation)
 * [License](#license)
 
-## Introduction
+## What this is
 
-This is the first Gym environment for machine learning (ML) tasks, enabling research on reinforcement learning (RL) algorithms for training such agents. <span style="font-variant:small-caps;">MLGym</span>-Bench consists of 13 diverse and open-ended AI research tasks from diverse domains such as computer vision, natural language processing, reinforcement learning, and game theory. Solving these tasks requires real-world AI research skills such as generating new ideas and hypotheses, creating and processing data, implementing ML methods, training models, running experiments, analyzing the results, and iterating through this process to improve on a given task.
-![image info](./assets/figs/mlgym.png)
+MLGym is a Gymnasium environment for machine learning research tasks. An agent works inside a container, reads a task, writes and runs code, validates its solution, and submits an artefact that is scored against a baseline. The upstream framework is single-agent: one model drives the whole task from start to finish.
 
-> [!WARNING]
-> Meta <span style="font-variant:small-caps;">MLGym</span> is currently an experimental framework intended for benchmarking AI Research Agents. It is under heavy development. Please expect major changes to the design.
->
-> The primary goal of <span style="font-variant:small-caps;">MLGym</span> is to expand the selection of AI research tasks for benchmarking the LLM Agents and implementing RL algorithms to train LLMs in a research environment.
-> `main` branch will always contain the latest stable release and all breaking changes will be announced in the [release notes](./CHANGELOG.md).
+This fork adds a layer above that agent. Instead of one agent solving a task end to end, a supervisor agent:
 
-## Installation
+1. Plans a workflow: a strategy, a sequence of agents to run, and success criteria.
+2. Creates worker agents one at a time, each with a role and instructions.
+3. Runs each worker inside the same container so later workers can see and build on earlier work.
+4. Tracks per-agent steps, exit status, cost, and tokens, then aggregates them into a single results file.
 
-1. Clone and install dependencies
+The supervisor, the worker agents, and the human-in-the-loop variant all reuse MLGym's existing agent loop, tool system, container management, and trajectory format. The new code is the planning and routing environment, the supervisor agent classes, the worker prompt templates, and the run scripts.
 
-    ```bash
-    git clone git@github.com:facebookresearch/MLGym.git
-    cd MLGym
-    conda create -y -n mlgym python=3.11
-    conda activate mlgym
-    pip install -e .
-    ```
+## Relationship to upstream MLGym
 
-2. Create a `.env` file in the MLGym directory (`MLGym/.env`) to save all the environment variables including API keys.
+This is a fork of [facebookresearch/MLGym](https://github.com/facebookresearch/MLGym). The base framework, the task suite, the data, the tools, the backend, the trajectory visualizer, and almost all of the `mlgym/` package come from the upstream project and carry Meta copyright headers. The MLGym paper is Nathani et al., 2025 (arXiv:2502.14499).
 
-    ```bash
-    # Env variables
-    MLGYM_CONFIG_ROOT="<path_to_MLGYM_root>/configs"
-    MLGYM_TASK_CONFIG_DIR="<path_to_MLGYM_root>/configs/tasks"
-    MLGYM_WORKSPACE_PATH="<path_to_MLGYM_root>/workspace"
-    MLGYM_ENV_TIMEOUT=10000
-    MLGYM_ACTION_SHORT_TIMEOUT=60
-    MLGYM_ACTION_LONG_TIMEOUT=10000
-    MLGYM_MODEL_MAX_RETRIES=3
+The commit history makes the lineage explicit. The upstream history runs up to the 0.1.1 ruff and mypy migration. On top of that, a single commit, "Add supervisor agent implementations and orchestration features," introduces everything described in this README. If you want to see exactly what was added on top of MLGym, that commit is the boundary.
 
-    # API keys
-    OPENAI_API_KEY=""
-    ANTHROPIC_API_KEY=""
-    ```
+The multi-agent work added here is:
 
-3. You can use either Docker or Podman to run tasks inside a container. Podman is the recommended way to run containers on macOS.
+* `mlgym/agent/supervisor_agent.py`, `mlgym/agent/research_supervisor.py`, `mlgym/agent/decoupled.py`, `mlgym/agent/supervisor_aware.py`
+* `mlgym/environment/supervisor_env.py`, `mlgym/environment/supervisor_env_mlgym.py`
+* `mlgym/constants.py` (supervisor and worker step limits)
+* The supervisor, worker, and orchestration configs under `configs/agents/`
+* The new top-level run scripts (`run_supervisor_mlgym.py`, `run_supervisor_basic.py`, `run_HIL.py`, `multi_run.py`, and the experiment drivers)
 
-4. Follow the instructions [here](https://docs.docker.com/desktop/) to install docker. Select the appropriate installation command based on your OS.
+## The multi-agent architecture
 
-5. If you are working on a Linux machine, please install the `nvidia-container-runtime`. This is required to start docker containers with GPU support.
+There are four agent classes added on top of MLGym's `BaseAgent`, plus two supervisor environments.
 
-    ```bash
-    sudo dnf install -y nvidia-container-toolkit
-    ```
+### Agent classes
 
-6. **Please skip to step 9 if you don't want to use Podman**.
+| Class | File | Role |
+| --- | --- | --- |
+| `SupervisorAgent` | `mlgym/agent/supervisor_agent.py` | Thin `BaseAgent` subclass. Drives the supervisor loop by emitting `plan_workflow`, `create_agent`, and `complete_workflow` commands. The planning logic lives in its prompt and in the supervisor environment. |
+| `ResearchSupervisor` | `mlgym/agent/research_supervisor.py` | A heavier supervisor that analyses the task, scores worker code quality, detects the current research phase, decides when intervention is needed, and assesses submission readiness. Driven by the `research_supervisor.yaml` config. |
+| `DecoupledAgent` | `mlgym/agent/decoupled.py` | A worker that proposes an action but does not execute it. Execution is left to the run loop or environment, which is what enables a propose-then-verify pattern. |
+| `SupervisorAwareAgent` | `mlgym/agent/supervisor_aware.py` | A worker that can pause and talk to a supervisor using the `ask_supervisor` and `submit_request` commands, used by the human-in-the-loop script. |
 
-7. For Linux:
-    a. Follow the instructions [here](https://podman.io/get-started) to install Podman.
-    b. Start podman socket. The last command should return a running podman socket:
+### Supervisor environments
 
-    ```bash
-    systemctl --user enable podman.socket
-    systemctl --user start podman.socket
-    systemctl --user status podman.socket
-    ```
+Both environments subclass `MLGymEnv` and add a planning and routing layer. They share the same three supervisor commands but differ in maturity.
 
-    c. Redirect docker host to podman by exporting docker host env variable in bashrc or current session:
+* `SupervisorEnvMLGym` (`supervisor_env_mlgym.py`) is the one the main supervisor script uses. It validates supervisor arguments, registers supervisor commands through MLGym's tool system, pre-allocates agent tracking to avoid race conditions, loads the enhanced worker template per agent, builds a collaborative context describing previous agents, escapes worker instructions into container environment variables, runs each worker, captures per-agent cost and token stats, and aggregates everything into a `results.json` with a `supervisor_stats` block.
+* `SupervisorEnv` (`supervisor_env.py`) is a simpler earlier version that uses `DecoupledAgent` workers and a fixed worker action list. It covers the same plan, create, run, complete cycle with less tracking and no per-agent cost aggregation.
 
-    ```bash
-    export DOCKER_HOST=unix:///run/user/$UID/podman/podman.sock
-    ```
+### Supervisor commands
 
-8. For MacOS:
-    a. If you use Homebrew package manager, install Podman with `brew install podman`. Otherwise, follow the instructions [here](https://podman.io/get-started).
-    b. Start the podman machine and set the docker host env variable:
+The supervisor only ever issues one of three commands per step, in this order:
 
-    ```bash
-    podman machine init
-    podman machine start
-    export DOCKER_HOST=unix://$(podman machine inspect --format '{{.ConnectionInfo.PodmanSocket.Path}}')
-    ```
-
-9. Pull the container image:
-
-    ```bash
-    docker pull aigym/mlgym-agent:latest
-    ```
-
-    or
-
-    ```bash
-    podman pull aigym/mlgym-agent:latest
-    ```
-
-10. Test launching a docker/podman container with GPU support
-
-    ```bash
-    docker run -it --gpus all --name test aigym/mlgym-agent /bin/bash
-    ls -la
-    exit
-    ```
-
-11. Check that GPUs are available in the docker container using `nvidia-smi`.
-
-### Troubleshooting
-
-If you get Nvidia CDI spec errors on linux (eg. `Error: setting up CDI devices: unresolvable CDI devices nvidia.com/gpu=all`), run these additional commands.
-
-```bash
-sudo mkdir /etc/cdi
-sudo nvidia-ctk cdi generate --output=/etc/cdi/nvidia.yaml
-sudo touch /etc/containers/nodocker
+```
+plan_workflow [strategy: "..."] [agents: "agent1,agent2,agent3"] [criteria: "..."]
+create_agent <name> '<instructions>'
+complete_workflow
 ```
 
-## Quick Start
+`get_available_actions` gates these by state: only `plan_workflow` is allowed until a workflow exists, then `create_agent` until all planned agents have run, then `complete_workflow`.
 
-### Docker
+## How orchestration works
+
+The main loop lives in `run_supervisor_mlgym.py`. The supervisor and the workers run in the same container, sequentially.
+
+```
+                       run_supervisor_mlgym.py
+                                 |
+                                 v
+                  +-----------------------------+
+                  |     SupervisorAgent (LLM)    |
+                  |  plan -> create -> complete  |
+                  +-----------------------------+
+                                 |
+              proposes one supervisor command per step
+                                 v
+                  +-----------------------------+
+                  |     SupervisorEnvMLGym       |
+                  |   (subclass of MLGymEnv)     |
+                  +-----------------------------+
+                        |            |        \
+            plan_workflow  create_agent     complete_workflow
+                        |            |              |
+            store plan   instantiate worker     aggregate results
+            + agent list  in shared container    + save results.json
+                                     |
+                                     v
+                  +-----------------------------+
+                  |   Worker agent (BaseAgent)   |
+                  |  edit / run / validate /     |
+                  |  submit, up to N steps       |
+                  +-----------------------------+
+                                     |
+                 results, cost, tokens, exit status
+                                     |
+                                     v
+                  collaborative context passed to the
+                  next worker (previous outputs, position,
+                  next role, objective, success criteria)
+```
+
+Step by step:
+
+1. The supervisor receives the task description and the current workflow state, then proposes a command.
+2. On `plan_workflow`, the environment parses a strategy, an agent sequence, and success criteria out of the command text and stores an `AgentPlan` per agent.
+3. On `create_agent`, the environment builds a fresh worker config from the enhanced worker template, injects the role and instructions and a collaborative context (a summary of the last few completed agents, the worker's position in the sequence, the next agent's role, the workflow objective, and the success criteria) into the container as environment variables, then runs the worker until it submits or hits its per-agent step limit. The worker runs in the same container, so files written by earlier workers are visible.
+4. Per-agent cost, tokens sent and received, API calls, steps, and exit status are recorded. Each worker also writes its own trajectory under `trajectories/<user>/<run_name>/<role_n>/`.
+5. On `complete_workflow`, the environment writes a combined `results.json` that lists every agent's scores plus a `supervisor_stats` block (total agents, total steps, total agent cost, supervisor cost, combined cost and tokens, average score) and the task baseline.
+
+Step budgets are separate for the supervisor and the workers, set in `mlgym/constants.py`: `DEFAULT_MAX_SUPERVISOR_STEPS = 10`, `DEFAULT_MAX_AGENTS_PER_WORKFLOW = 10`, `DEFAULT_MAX_STEPS_PER_AGENT = 30`. They are overridable from the command line.
+
+## Self-correction and critique
+
+The "self-reflection and cross-agent critique" in this system comes from a few concrete mechanisms rather than one module.
+
+* Format self-correction. Inherited from MLGym's `BaseAgent`: when a model produces output that does not parse into a discussion plus a single command, `forward_with_error_check` and the requery path ask the model to fix its own output before the step counts. This applies to the supervisor and every worker.
+* Supervisor critique and intervention. `ResearchSupervisor` scores worker code on syntax, completeness, correctness, and efficiency, tracks which research phase the worker is in (understanding, implementation, testing, optimization, submission), and fires intervention triggers when progress stalls, when there is no implementation late in the run, when the worker is stuck exploring, or when edit attempts repeat. It then emits targeted guidance. The thresholds and patterns are configurable from YAML.
+* Cross-agent handoff. Each worker is told what previous workers produced and is instructed to read their outputs, build on what worked, avoid repeating failures, and leave documentation for the next worker. This is the worker template's collaboration contract, reinforced by the `previous_agent_context` the environment injects.
+* Human-in-the-loop approval. With `SupervisorAwareAgent` and `run_HIL.py`, a worker can call `ask_supervisor` to ask for guidance or `submit_request` to ask for approval before submitting. A human at the terminal approves, rejects with feedback, or answers, and the feedback flows back into the worker's next observation.
+
+## Worker roles and the orchestration pipeline
+
+Worker behaviour is set entirely by prompt templates under `configs/agents/`. The supervisor can name arbitrary roles at plan time, but the repository also ships fixed role configs for a feature-engineering, modeling, validation pipeline in `configs/agents/orchestration/`:
+
+* `feature_eng.yaml`: cleans and transforms the dataset, writes engineered files and a `feature_insights.txt` for the next agent.
+* `modeling.yaml`: looks for the engineered files and insights, trains and compares models, logs experiments to `modeling_log.txt`, and saves predictions.
+* `validation.yaml`: checks every prior output, runs `validate`, records its decision in `validation_log.txt`, and makes the final `submit`.
+
+These agents coordinate through files in the shared container (engineered datasets, insight files, logs) rather than through any message bus. The worker templates also include guardrails learned from runs, for example not opening large CSVs directly, always validating before submitting, and submitting a working solution when few steps remain.
+
+Other worker and supervisor configs:
+
+* `worker_template.yaml`, `worker_template_enhanced.yaml`: the collaborative worker prompts. The enhanced one adds explicit position, next-agent, objective, and success-criteria fields and a submission workflow.
+* `supervisor.yaml`, `supervisor_enhanced.yaml`: supervisor prompts. The enhanced one adds a workflow design framework and quality-gate guidance.
+* `research_supervisor.yaml`: the prompt and configurable phases, file patterns, command patterns, and intervention triggers for `ResearchSupervisor`.
+* `default_memory.yaml`: a worker prompt that uses MLGym's `memory_read` and `memory_write` tools to persist findings across steps.
+* `default_lit_search.yaml`: a worker prompt that uses the `literature_search` tool.
+* `default_gpu_info.yaml`, `human_in_loop.yaml`: GPU-aware and human-in-the-loop worker prompts.
+
+## Tasks and benchmark
+
+The task suite is MLGym's. The repository ships 18 task configs under `configs/tasks/` with their data and evaluation scripts under `data/`, spanning several domains:
+
+* Computer vision: image classification (CIFAR-10, Fashion-MNIST), image captioning (COCO).
+* Natural language: language modeling (FineWeb), natural language inference (MNLI).
+* Reinforcement learning: Breakout (MinAtar), Meta Maze, Mountain Car Continuous.
+* Game theory: Battle of the Sexes, Blotto, Prisoner's Dilemma.
+* Regression: Kaggle house prices.
+* Search and satisfiability: 3-SAT solving time.
+
+Each task provides a baseline script and an `evaluate.py`. Agents must beat the baseline. The upstream MLGym-Bench v0 is described in the paper as 13 tasks; the configs here include those plus extra variants (for example L1 and alternate regression and RL formulations).
+
+## Results
+
+This repository does not report new quantitative results for the multi-agent system. There is no benchmark table, no aggregated supervisor scorecard, and no paper for the supervisor layer.
+
+The trajectories checked into `trajectories/mlgym_bench_v0/` and their `results.json` files are upstream MLGym single-agent runs (models named `metagen-*` such as GPT-4o, o1, o3-mini, Claude 3.5 and 3.7 Sonnet, Gemini, DeepSeek, Llama). They belong to the base MLGym evaluation, not to the supervisor workflows added here. The supervisor environments do produce their own per-run `results.json` with per-agent and aggregated cost, token, and score fields when you run them, but no such runs are committed.
+
+If you want numbers for the multi-agent system, you need to run it yourself and read the aggregated results file the supervisor environment writes.
+
+## Repository structure
+
+```
+.
+├── mlgym/                          # Core package (mostly upstream MLGym)
+│   ├── agent/
+│   │   ├── base.py                 # BaseAgent: the agent loop, format self-correction (upstream)
+│   │   ├── supervisor_agent.py     # SupervisorAgent: plan/create/complete loop (added)
+│   │   ├── research_supervisor.py  # ResearchSupervisor: scoring, phases, intervention (added)
+│   │   ├── decoupled.py            # DecoupledAgent: propose without executing (added)
+│   │   ├── supervisor_aware.py     # SupervisorAwareAgent: ask/submit-request worker (added)
+│   │   ├── history_processors.py   # Memory windows: LastN/Last5/Last100Observations (upstream)
+│   │   └── parsing.py              # Output parsers (upstream)
+│   ├── environment/
+│   │   ├── env.py                  # MLGymEnv, the base Gymnasium environment (upstream)
+│   │   ├── supervisor_env.py       # SupervisorEnv: simpler multi-agent env (added)
+│   │   ├── supervisor_env_mlgym.py # SupervisorEnvMLGym: main multi-agent env (added)
+│   │   ├── tasks.py, registration.py, spaces.py (upstream)
+│   ├── backend/                    # LiteLLM, human, and debugging backends (upstream)
+│   ├── tools/                      # Tool definitions and command parsing (upstream)
+│   ├── evaluation/                 # Scoring helpers (upstream)
+│   ├── constants.py                # Supervisor/worker step limits and defaults (added)
+│   └── types.py, exceptions.py, utils/ (upstream)
+├── configs/
+│   ├── agents/
+│   │   ├── default*.yaml           # Single-agent worker prompts (default, memory, lit_search, gpu_info)
+│   │   ├── supervisor*.yaml        # Supervisor prompts (basic and enhanced)
+│   │   ├── research_supervisor.yaml
+│   │   ├── worker_template*.yaml   # Collaborative worker prompts
+│   │   ├── human_in_loop.yaml
+│   │   └── orchestration/          # feature_eng.yaml, modeling.yaml, validation.yaml
+│   ├── tasks/                      # 18 task configs (upstream suite plus variants)
+│   └── datasets/                   # Dataset configs
+├── data/                           # Per-task baselines, evaluate.py, sample submissions
+├── tools/                          # Shell and Python tool implementations (upstream, SWE-agent derived)
+├── dockerfiles/                    # Container images and aliases
+├── demo/                           # Streamlit trajectory visualizer and demo
+├── trajectories/mlgym_bench_v0/    # Upstream single-agent run trajectories and results
+├── scripts/                        # Experiment shell scripts and result processing
+├── notebooks/                      # Plotting
+├── run.py                          # Upstream single-agent runner
+├── run_supervisor_mlgym.py         # Main multi-agent runner (SupervisorEnvMLGym)
+├── run_supervisor_basic.py         # Multi-agent runner (SupervisorEnv)
+├── run_HIL.py                      # Human-in-the-loop runner (SupervisorAwareAgent)
+├── multi_run.py                    # Parallel agents over GPUs
+├── run_decoupled*.py               # Decoupled propose/verify drivers (see caveats)
+├── run_sequential_experiment.py    # Sequential experiment driver
+├── simple_run.py, single_experiment.py, run_replay.py (upstream-style helpers)
+└── pyproject.toml
+```
+
+## Getting started
+
+The environment setup is the same as upstream MLGym. Agents run inside a Docker or Podman container, and an LLM backend is reached through LiteLLM.
+
+1. Clone and install.
+
+   ```bash
+   git clone https://github.com/limbajimba/Multi-agent-MLGym.git
+   cd Multi-agent-MLGym
+   conda create -y -n mlgym python=3.11
+   conda activate mlgym
+   pip install -e .
+   ```
+
+2. Create a `.env` file in the repository root with paths and API keys.
+
+   ```bash
+   MLGYM_CONFIG_ROOT="<path_to_repo>/configs"
+   MLGYM_TASK_CONFIG_DIR="<path_to_repo>/configs/tasks"
+   MLGYM_WORKSPACE_PATH="<path_to_repo>/workspace"
+   MLGYM_ENV_TIMEOUT=10000
+   MLGYM_ACTION_SHORT_TIMEOUT=60
+   MLGYM_ACTION_LONG_TIMEOUT=10000
+   MLGYM_MODEL_MAX_RETRIES=3
+
+   OPENAI_API_KEY=""
+   ANTHROPIC_API_KEY=""
+   ```
+
+3. Install Docker or Podman. Podman is the default container type in `mlgym/constants.py` and the recommended option on macOS. On Linux with GPUs, install the NVIDIA container toolkit. The upstream README has the full per-OS instructions, including Podman socket setup and CDI troubleshooting.
+
+4. Pull the agent image.
+
+   ```bash
+   docker pull aigym/mlgym-agent:latest
+   # or
+   podman pull aigym/mlgym-agent:latest
+   ```
+
+## Running the multi-agent workflows
+
+The main entry point is the MLGym-compliant supervisor runner. With no flags it defaults to the Battle of the Sexes task, a Podman container, and a small worker model.
+
+```bash
+python run_supervisor_mlgym.py
+```
+
+Common overrides:
+
+```bash
+python run_supervisor_mlgym.py \
+  --environment.task_config_path tasks/regressionKaggleHousePrice.yaml \
+  --environment.container_type docker \
+  --supervisor_agent.model.model_name litellm:gpt-4o-mini \
+  --supervisor_agent.agent_config_path configs/agents/supervisor_enhanced.yaml \
+  --max_supervisor_steps 10 \
+  --max_agents_per_workflow 5 \
+  --max_steps_per_agent 30
+```
+
+The worker model and worker template are set in the script. By default workers use `configs/agents/worker_template_enhanced.yaml` and a small LiteLLM model. Edit `env.default_agent_args` in `run_supervisor_mlgym.py` to change the worker model or template.
+
+Other runners:
+
+```bash
+# Simpler supervisor environment with decoupled workers
+python run_supervisor_basic.py --environment.task_config_path tasks/battleOfSexes.yaml
+
+# Human in the loop: you approve submissions and answer the agent's questions at the terminal
+python run_HIL.py --environment.task_config_path tasks/regressionKaggleHousePrice.yaml
+
+# Run several independent agents in parallel across GPUs
+python multi_run.py --num_agents 4 --gpus_per_agent 1
+```
+
+Results and trajectories land under `trajectories/<user>/<run_name>/`. For supervisor runs, the supervisor's own trajectory is in a `supervisor/` subdirectory, each worker has its own `<role_n>/` subdirectory, and the aggregated `results.json` sits next to the supervisor trajectory.
+
+## Single-agent MLGym (upstream)
+
+The original single-agent flow still works unchanged. This runs one agent end to end on a task.
 
 ```bash
 python run.py \
@@ -148,50 +324,27 @@ python run.py \
   --aliases_file ./dockerfiles/aliases.sh
 ```
 
-### Podman
+Run `python run.py --help` for the full flag list.
 
-```bash
-python run.py \
-  --container_type podman \
-  --task_config_path tasks/battleOfSexes.yaml \
-  --model litellm:claude-3-5-sonnet-20240620 \
-  --per_instance_cost_limit 4.00 \
-  --agent_config_path configs/agents/default.yaml \
-  --temp 1 \
-  --gpus 0 \
-  --max_steps 50 \
-  --aliases_file ./dockerfiles/aliases.sh
-```
+## Trajectory visualizer
 
-To see a full list of flags, please run `python run.py --help`.
-
-> [!NOTE]
-> A detailed documentation for all parts of the <span style="font-variant:small-caps;">MLGym</span> framework is under construction. Please stay tuned!
-
-## Trajectory Visualizer
-
-<span style="font-variant:small-caps;">MLGym</span> provides a Web UI to inspect the agent trajectories.
+MLGym's Streamlit visualizer works for both single-agent and worker trajectories.
 
 ```bash
 streamlit run demo/trajectory_visualizer.py -- --trajectory_dir <absolute_path_to_trajectories>
-
-# An example
-streamlit run demo/trajectory_visualizer.py -- --trajectory_dir $HOME/Projects/MLGym/trajectories/mlgym_bench_v0
 ```
 
-To run the demo for <span style="font-variant:small-caps;">MLGym</span>, use the following command:
+## Status and caveats
 
-```bash
-streamlit run demo/demo.py
-```
+* Experimental. The upstream framework warns that MLGym is under heavy development. The multi-agent layer is research code added in one commit and should be read as such.
+* The working multi-agent path is `run_supervisor_mlgym.py` with `SupervisorAgent` and `SupervisorEnvMLGym`, and the human-in-the-loop path is `run_HIL.py` with `SupervisorAwareAgent`. These import only modules that exist in the tree.
+* The decoupled scripts are incomplete. `run_decoupled.py`, `run_decoupled_simple.py`, and `run_decoupled_supervisor.py` import `from mlgym.agent.supervisor import SupervisorAgent` and call `propose_action`, `review_action`, and `receive_feedback`. There is no `mlgym/agent/supervisor.py` in the tree (the supervisor class is in `supervisor_agent.py`), and those methods are not defined on any agent class. Treat these scripts as a sketch of a propose-and-review design, not as runnable code, unless you supply the missing module and methods. The `DecoupledAgent` class itself is present and used by `SupervisorEnv`.
+* The README links a `CHANGELOG.md` and a `MAINTENANCE.md` that are inherited text from upstream and are not present in this repository.
+* No multi-agent benchmark numbers are committed. See [Results](#results).
 
-## Contributions and Maintenance
+## Credit and citation
 
-<span style="font-variant:small-caps;">MLGym</span> was built and is maintained by [GenAI at Meta](https://ai.meta.com/) and [UCSB NLP](http://nlp.cs.ucsb.edu/). We welcome contributions to <span style="font-variant:small-caps;">MLGym</span>. If you are interested in contributing, please see [this document](./CONTRIBUTING.md). Our maintenance plan can be found [here](./MAINTENANCE.md).
-
-## Citation
-
-If you find this work helpful, please consider citing us using the following:
+The base framework, the task suite, the tools, and most of the package are the work of GenAI at Meta and UCSB NLP. If you use MLGym, cite the original paper:
 
 ```tex
 @misc{nathani2025mlgymnewframeworkbenchmark,
@@ -205,6 +358,8 @@ If you find this work helpful, please consider citing us using the following:
 }
 ```
 
+The tools under `tools/` are adapted from [SWE-agent](https://github.com/SWE-agent/SWE-agent), as noted in `tools/README.md`. Upstream project: [facebookresearch/MLGym](https://github.com/facebookresearch/MLGym).
+
 ## License
 
-The majority of this code is licensed under CC-BY-NC 4.0 (Attribution-NonCommercial 4.0 International) license. However portions of the project are available under separate license terms: [SWE-Agent](https://github.com/SWE-agent/SWE-agent?tab=MIT-1-ov-file) and [Modded-NanoGPT](https://github.com/KellerJordan/modded-nanogpt?tab=MIT-1-ov-file) are released under MIT license; [Gymnax](https://github.com/RobertTLange/gymnax?tab=Apache-2.0-1-ov-file) and [Gymnax-blines](https://github.com/RobertTLange/gymnax-blines?tab=Apache-2.0-1-ov-file) are released under Apache 2.0 License.
+The majority of this code is licensed under CC-BY-NC 4.0 (Attribution-NonCommercial 4.0 International), inherited from upstream MLGym. Portions are under separate terms: SWE-agent and Modded-NanoGPT are MIT; Gymnax and Gymnax-blines are Apache 2.0. See `LICENSE`.

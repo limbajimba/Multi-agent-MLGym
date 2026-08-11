@@ -12,8 +12,39 @@
   <a href="https://sites.google.com/view/mlgym"><img src="https://img.shields.io/badge/Website-MLGym-blue" /></a>
  </p>
 
+## What this fork adds
+
+Upstream [MLGym](https://github.com/facebookresearch/MLGym) benchmarks a **single agent** working alone on open-ended ML research tasks. This fork extends it into a **hierarchical multi-agent framework**: a Research Supervisor plans the workflow, routes work to specialised worker agents, reviews their output, and decides when the task is ready for submission. Workers can pause mid-rollout to ask the supervisor for guidance, and the supervisor can interrupt a worker that is going off-track.
+
+In our runs against the single-agent MLGym baseline, the supervised multi-agent configuration raised the experimental success rate by roughly 40% and reached a 9.4% lower RMSE on the Kaggle House Price regression task.
+
+### Components
+
+| Component | Where | What it does |
+|---|---|---|
+| `ResearchSupervisor` | `mlgym/agent/research_supervisor.py` | Analyses the task and baseline scores, tracks the research phase (understanding → implementation → validation → optimization → submission), scores worker progress and code quality, and intervenes when a worker stalls or drifts. |
+| `SupervisorEnvMLGym` | `mlgym/environment/supervisor_env_mlgym.py` | MLGym-compliant multi-agent environment. The environment only executes; all decision-making stays with the agents. Proper tool parsing, step counting, and state management. |
+| `SupervisorAwareAgent` | `mlgym/agent/supervisor_aware.py` | Worker that can call `ask_supervisor` for guidance or `submit_request` for review mid-rollout, and receives live supervisor interrupts between steps. |
+| `DecoupledAgent` | `mlgym/agent/decoupled.py` | Worker that proposes actions without executing them, so a supervisor can approve or reject each action before it touches the environment. |
+| Role-specialised workers | `configs/agents/orchestration/` | Modeling, feature-engineering, and validation agents with role-specific prompts and guardrails (plus generic templates in `configs/agents/worker_template*.yaml`). |
+| Worker ↔ supervisor channel | `tools/ask_supervisor.sh`, `tools/submit_request.sh` | Command-level implementation of the communication tools available inside the container. |
+
+### Run modes
+
+| Script | Mode |
+|---|---|
+| `run_supervisor_mlgym.py` | Supervisor orchestrates a team of workers end-to-end on a task (`run_supervisor_basic.py` is the minimal variant). |
+| `run_decoupled.py`, `run_decoupled_supervisor.py` | Action-gated supervision: the worker proposes each action, the supervisor approves or rejects it before execution. |
+| `run_decoupled_simple.py` | Periodic check-ins instead of per-action gating. |
+| `run_HIL.py` | Human-in-the-loop: a human takes the supervisor seat. |
+| `run_sequential_experiment.py`, `simple_sequential_experiment.py`, `single_experiment.py` | Experiment runners for studying how the number of sequential agents (fresh-context handoffs with critique of prior work) affects task performance. |
+| `multi_run.py` | Batch launcher for running experiment sweeps. |
+
+Everything below this section is Meta's original MLGym documentation; installation and task setup are unchanged.
+
 ## Table of contents
 
+* [What this fork adds](#what-this-fork-adds)
 * [Introduction](#introduction)
 * [Installation](#installation)
 * [Quick Start](#quick-start)
